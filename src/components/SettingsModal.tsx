@@ -10,6 +10,8 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { auth, signOutFirebase } from '../lib/firebase';
+import { firestoreStore } from '../lib/firestoreStore';
 import { offlineDb } from '../lib/offlineDb';
 import { formatRelativeDate } from '../lib/theme';
 import type {
@@ -865,7 +867,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
-                      await api.logout();
+                      await api.logout().catch(() => {});
+                      await signOutFirebase().catch(() => {});
                       onLoggedOut();
                     }}
                     className="px-4 py-2 rounded-lg border border-[var(--ink-border)] text-sm flex items-center gap-2"
@@ -891,9 +894,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <button
                           type="button"
                           onClick={async () => {
-                            await api.deleteAccount();
-                            await offlineDb.clearAll();
-                            onLoggedOut();
+                            try {
+                              if (auth.currentUser) {
+                                await firestoreStore.deleteAllUserFirestoreData(auth.currentUser.uid);
+                              }
+                              await api.deleteAccount();
+                              await signOutFirebase().catch(() => {});
+                              await offlineDb.clearAll();
+                              onLoggedOut();
+                            } catch (err) {
+                              setError(
+                                err instanceof Error ? err.message : 'Account deletion failed'
+                              );
+                            }
                           }}
                           className="px-4 py-1.5 rounded bg-red-600 text-white text-xs font-medium"
                         >

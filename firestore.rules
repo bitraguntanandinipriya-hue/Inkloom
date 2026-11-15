@@ -1,0 +1,632 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isNullableId(val) {
+      return val == null || isValidId(val);
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidNullableString(val, maxLen) {
+      return val == null || (val is string && val.size() <= maxLen);
+    }
+
+    function isValidStringList(arr, maxItems, maxItemLen) {
+      return arr is list
+        && arr.size() <= maxItems
+        && (arr.size() == 0 || (arr[0] is string && arr[0].size() <= maxItemLen));
+    }
+
+    // Master Gate Parent Helpers (Never called inside allow list!)
+    function getNovel(novelId) {
+      return get(/databases/$(database)/documents/novels/$(novelId));
+    }
+
+    function isNovelOwner(novelId) {
+      return exists(/databases/$(database)/documents/novels/$(novelId))
+        && getNovel(novelId).data.userId == request.auth.uid;
+    }
+
+    function isNovelEditable(novelId) {
+      return isNovelOwner(novelId)
+        && getNovel(novelId).data.status != 'completed';
+    }
+
+    function chapterExists(novelId, chapterId) {
+      return exists(/databases/$(database)/documents/novels/$(novelId)/chapters/$(chapterId));
+    }
+
+    function characterExists(novelId, characterId) {
+      return exists(/databases/$(database)/documents/novels/$(novelId)/characters/$(characterId));
+    }
+
+    // 3. Entity Validation Blueprints (Anti-Update-Gap)
+
+    function isValidUserPublicProfile(data, userId) {
+      return data.keys().hasAll(['id', 'displayName', 'themePreference', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'displayName', 'themePreference', 'createdAt', 'updatedAt'])
+        && data.id == userId
+        && isValidId(data.id)
+        && isValidString(data.displayName, 1, 120)
+        && data.themePreference in ['system', 'light', 'dark']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEditorPrefs(prefs) {
+      return prefs is map
+        && prefs.keys().hasAll(['manuscriptFont', 'fontSizePx', 'lineSpacing', 'maxWidthCh', 'defaultChapterWordTarget', 'showParagraphGuides'])
+        && prefs.keys().hasOnly(['manuscriptFont', 'fontSizePx', 'lineSpacing', 'maxWidthCh', 'defaultChapterWordTarget', 'showParagraphGuides'])
+        && prefs.manuscriptFont in ['lora', 'merriweather', 'source-serif', 'inter']
+        && prefs.fontSizePx is number && prefs.fontSizePx >= 12 && prefs.fontSizePx <= 32
+        && prefs.lineSpacing is number && prefs.lineSpacing >= 1.2 && prefs.lineSpacing <= 2.6
+        && prefs.maxWidthCh is number && prefs.maxWidthCh >= 40 && prefs.maxWidthCh <= 120
+        && prefs.defaultChapterWordTarget is int && prefs.defaultChapterWordTarget >= 200 && prefs.defaultChapterWordTarget <= 20000
+        && prefs.showParagraphGuides is bool;
+    }
+
+    function isValidAiPrefs(prefs) {
+      return prefs is map
+        && prefs.keys().hasAll(['defaultProvider', 'defaultModelId', 'backgroundIntelligenceEnabled', 'economicalModelId', 'thinkingMode'])
+        && prefs.keys().hasOnly(['defaultProvider', 'defaultModelId', 'backgroundIntelligenceEnabled', 'economicalModelId', 'thinkingMode'])
+        && prefs.defaultProvider in ['gemini', 'openai', 'anthropic', 'deepseek', 'meta_llama', 'mistral', 'openrouter', 'custom']
+        && isValidString(prefs.defaultModelId, 1, 160)
+        && prefs.backgroundIntelligenceEnabled is bool
+        && isValidString(prefs.economicalModelId, 1, 160)
+        && prefs.thinkingMode in ['fast', 'balanced', 'deep'];
+    }
+
+    function isValidUserPrivateInfo(data, userId) {
+      return data.keys().hasAll(['userId', 'email', 'authMethod', 'editorPrefs', 'aiPrefs', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'email', 'avatarUrl', 'authMethod', 'editorPrefs', 'aiPrefs', 'createdAt', 'updatedAt'])
+        && data.userId == userId
+        && isValidId(data.userId)
+        && isValidString(data.email, 3, 254)
+        && (!('avatarUrl' in data) || isValidNullableString(data.avatarUrl, 1000))
+        && data.authMethod in ['google', 'email']
+        && isValidEditorPrefs(data.editorPrefs)
+        && isValidAiPrefs(data.aiPrefs)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStoryDna(dna) {
+      return dna is map
+        && dna.keys().hasAll(['narrationLanguage', 'dialogueLanguages', 'mixedLanguageWriting', 'romanScriptOnly', 'perspective', 'tense', 'pacing', 'contentBoundaries', 'writingRules'])
+        && dna.keys().hasOnly(['narrationLanguage', 'dialogueLanguages', 'mixedLanguageWriting', 'romanScriptOnly', 'perspective', 'tense', 'pacing', 'contentBoundaries', 'writingRules', 'customGenreLabel'])
+        && isValidString(dna.narrationLanguage, 1, 80)
+        && dna.dialogueLanguages is list
+        && dna.dialogueLanguages.size() >= 1
+        && dna.dialogueLanguages.size() <= 10
+        && dna.dialogueLanguages[0] is string
+        && dna.dialogueLanguages[0].size() <= 80
+        && dna.mixedLanguageWriting is bool
+        && dna.romanScriptOnly is bool
+        && dna.perspective in ['First Person', 'Third Person Limited', 'Third Person Omniscient', 'Second Person', 'Multi-POV']
+        && dna.tense in ['Past Tense', 'Present Tense']
+        && dna.pacing in ['Slow Burn', 'Measured', 'Fast-Paced', 'Atmospheric']
+        && isValidString(dna.contentBoundaries, 0, 3000)
+        && isValidString(dna.writingRules, 0, 3000)
+        && (!('customGenreLabel' in dna) || isValidString(dna.customGenreLabel, 0, 100));
+    }
+
+    function isValidNovel(data, novelId) {
+      return data.keys().hasAll(['id', 'userId', 'title', 'authorName', 'genre', 'synopsis', 'status', 'storyDna', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'title', 'authorName', 'genre', 'synopsis', 'coverImageId', 'status', 'completedAt', 'trashedAt', 'storyDna', 'chapterCount', 'totalWordCount', 'createdAt', 'updatedAt'])
+        && data.id == novelId
+        && isValidId(data.id)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && isValidString(data.title, 1, 200)
+        && isValidString(data.authorName, 0, 120)
+        && isValidString(data.genre, 1, 80)
+        && isValidString(data.synopsis, 0, 5000)
+        && (!('coverImageId' in data) || isNullableId(data.coverImageId))
+        && data.status in ['active', 'completed', 'trashed']
+        && (!('completedAt' in data) || data.completedAt == null || data.completedAt is timestamp)
+        && (!('trashedAt' in data) || data.trashedAt == null || data.trashedAt is timestamp)
+        && isValidStoryDna(data.storyDna)
+        && (!('chapterCount' in data) || (data.chapterCount is int && data.chapterCount >= 0 && data.chapterCount <= 10000))
+        && (!('totalWordCount' in data) || (data.totalWordCount is int && data.totalWordCount >= 0 && data.totalWordCount <= 10000000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCharacter(data, novelId, characterId) {
+      return data.keys().hasAll(['id', 'novelId', 'userId', 'roleType', 'name', 'status', 'sortOrder', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'userId', 'roleType', 'name', 'age', 'role', 'archetype', 'personality', 'psychologicalTraits', 'triggers', 'vulnerabilities', 'relationshipDynamics', 'relationships', 'physicalAppearance', 'backstory', 'characterDevelopment', 'status', 'customStatus', 'location', 'imageId', 'sortOrder', 'createdAt', 'updatedAt'])
+        && data.id == characterId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && data.roleType in ['lead_male', 'lead_female', 'lead_custom', 'supporting']
+        && isValidString(data.name, 1, 120)
+        && (!('age' in data) || isValidString(data.age, 0, 40))
+        && (!('role' in data) || isValidString(data.role, 0, 120))
+        && (!('archetype' in data) || isValidString(data.archetype, 0, 120))
+        && (!('personality' in data) || isValidString(data.personality, 0, 2000))
+        && (!('psychologicalTraits' in data) || isValidString(data.psychologicalTraits, 0, 2000))
+        && (!('triggers' in data) || isValidString(data.triggers, 0, 1000))
+        && (!('vulnerabilities' in data) || isValidString(data.vulnerabilities, 0, 1000))
+        && (!('relationshipDynamics' in data) || isValidString(data.relationshipDynamics, 0, 2000))
+        && (!('relationships' in data) || isValidString(data.relationships, 0, 2000))
+        && (!('physicalAppearance' in data) || isValidString(data.physicalAppearance, 0, 2000))
+        && (!('backstory' in data) || isValidString(data.backstory, 0, 4000))
+        && (!('characterDevelopment' in data) || isValidString(data.characterDevelopment, 0, 2000))
+        && data.status in ['Active', 'Injured', 'Missing', 'Estranged', 'Deceased', 'Custom']
+        && (!('customStatus' in data) || isValidString(data.customStatus, 0, 80))
+        && (!('location' in data) || isValidString(data.location, 0, 160))
+        && (!('imageId' in data) || isNullableId(data.imageId))
+        && data.sortOrder is int && data.sortOrder >= 0 && data.sortOrder <= 1000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChapter(data, novelId, chapterId) {
+      return data.keys().hasAll(['id', 'novelId', 'userId', 'chapterNumber', 'title', 'content', 'prompt', 'timelineAnchor', 'locationAnchor', 'status', 'wordCount', 'clientUpdatedAt', 'version', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'userId', 'chapterNumber', 'title', 'content', 'prompt', 'timelineAnchor', 'locationAnchor', 'status', 'wordCount', 'trashedAt', 'clientUpdatedAt', 'version', 'createdAt', 'updatedAt'])
+        && data.id == chapterId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && data.chapterNumber is int && data.chapterNumber >= 1 && data.chapterNumber <= 5000
+        && isValidString(data.title, 1, 200)
+        && isValidString(data.content, 0, 250000)
+        && isValidString(data.prompt, 0, 20000)
+        && isValidString(data.timelineAnchor, 0, 300)
+        && isValidString(data.locationAnchor, 0, 300)
+        && data.status in ['Draft', 'Confirmed', 'Completed']
+        && data.wordCount is int && data.wordCount >= 0 && data.wordCount <= 200000
+        && (!('trashedAt' in data) || data.trashedAt == null || data.trashedAt is timestamp)
+        && isValidString(data.clientUpdatedAt, 1, 64)
+        && data.version is int && data.version >= 1 && data.version <= 1000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChapterVersion(data, novelId, chapterId, versionId) {
+      return data.keys().hasAll(['id', 'novelId', 'chapterId', 'userId', 'title', 'content', 'prompt', 'wordCount', 'reason', 'createdAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'chapterId', 'userId', 'title', 'content', 'prompt', 'wordCount', 'reason', 'createdAt'])
+        && data.id == versionId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && data.chapterId == chapterId
+        && isValidId(data.chapterId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && isValidString(data.title, 1, 200)
+        && isValidString(data.content, 0, 250000)
+        && isValidString(data.prompt, 0, 20000)
+        && data.wordCount is int && data.wordCount >= 0 && data.wordCount <= 200000
+        && isValidString(data.reason, 0, 200)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidCanonFact(data, novelId, canonId) {
+      return data.keys().hasAll(['id', 'novelId', 'userId', 'factText', 'category', 'approvalStatus', 'isPinned', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'userId', 'factText', 'category', 'sourceChapterId', 'approvalStatus', 'isPinned', 'createdAt', 'updatedAt'])
+        && data.id == canonId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && isValidString(data.factText, 1, 1000)
+        && isValidString(data.category, 1, 80)
+        && (!('sourceChapterId' in data) || isNullableId(data.sourceChapterId))
+        && data.approvalStatus in ['pending', 'pinned', 'rejected']
+        && data.isPinned is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidChapterSummary(data, novelId, summaryId) {
+      return data.keys().hasAll(['id', 'novelId', 'chapterId', 'userId', 'summaryText', 'timelineNote', 'locations', 'characters', 'objects', 'revelations', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'chapterId', 'userId', 'chapterNumber', 'chapterTitle', 'summaryText', 'timelineNote', 'locations', 'characters', 'objects', 'revelations', 'createdAt', 'updatedAt'])
+        && data.id == summaryId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && isValidId(data.chapterId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && (!('chapterNumber' in data) || (data.chapterNumber is int && data.chapterNumber >= 1 && data.chapterNumber <= 5000))
+        && (!('chapterTitle' in data) || isValidString(data.chapterTitle, 0, 200))
+        && isValidString(data.summaryText, 1, 5000)
+        && isValidString(data.timelineNote, 0, 300)
+        && isValidStringList(data.locations, 30, 120)
+        && isValidStringList(data.characters, 30, 120)
+        && isValidStringList(data.objects, 30, 120)
+        && isValidStringList(data.revelations, 30, 300)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStateProposal(data, novelId, proposalId) {
+      return data.keys().hasAll(['id', 'novelId', 'chapterId', 'characterId', 'userId', 'proposedStatus', 'proposedLocation', 'reason', 'approvalStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'chapterId', 'characterId', 'userId', 'characterName', 'proposedStatus', 'proposedLocation', 'reason', 'approvalStatus', 'createdAt', 'updatedAt'])
+        && data.id == proposalId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && isValidId(data.chapterId)
+        && isValidId(data.characterId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && (!('characterName' in data) || isValidString(data.characterName, 0, 120))
+        && data.proposedStatus in ['Active', 'Injured', 'Missing', 'Estranged', 'Deceased', 'Custom']
+        && isValidString(data.proposedLocation, 0, 160)
+        && isValidString(data.reason, 0, 500)
+        && data.approvalStatus in ['pending', 'approved', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidScratchpadNote(data, novelId, noteId) {
+      return data.keys().hasAll(['id', 'novelId', 'userId', 'title', 'content', 'category', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'novelId', 'userId', 'title', 'content', 'category', 'createdAt', 'updatedAt'])
+        && data.id == noteId
+        && isValidId(data.id)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && isValidString(data.title, 1, 200)
+        && isValidString(data.content, 0, 20000)
+        && isValidString(data.category, 1, 80)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidImageMetadata(data, novelId, imageId) {
+      return data.keys().hasAll(['id', 'userId', 'novelId', 'entityType', 'category', 'title', 'notes', 'mimeType', 'sizeBytes', 'url', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'userId', 'novelId', 'entityType', 'entityId', 'category', 'title', 'notes', 'mimeType', 'sizeBytes', 'url', 'createdAt', 'updatedAt'])
+        && data.id == imageId
+        && isValidId(data.id)
+        && data.userId == request.auth.uid
+        && isValidId(data.userId)
+        && data.novelId == novelId
+        && isValidId(data.novelId)
+        && data.entityType in ['cover', 'character', 'reference']
+        && (!('entityId' in data) || isNullableId(data.entityId))
+        && data.category in ['cover', 'character', 'location', 'architecture', 'clothing', 'prop', 'other']
+        && isValidString(data.title, 0, 200)
+        && isValidString(data.notes, 0, 3000)
+        && data.mimeType in ['image/jpeg', 'image/png', 'image/webp']
+        && data.sizeBytes is int && data.sizeBytes > 0 && data.sizeBytes <= 8388608
+        && isValidString(data.url, 1, 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPublicProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserPublicProfile(incoming(), userId)
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'themePreference', 'updatedAt']);
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      match /private/{infoId} {
+        allow get: if isValidId(userId) && infoId == 'info' && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId)
+          && infoId == 'info'
+          && isOwner(userId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && infoId == 'info'
+          && isOwner(userId)
+          && isValidUserPrivateInfo(incoming(), userId)
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'avatarUrl', 'authMethod', 'editorPrefs', 'aiPrefs', 'updatedAt']);
+        allow delete: if isValidId(userId) && infoId == 'info' && isOwner(userId);
+      }
+    }
+
+    match /novels/{novelId} {
+      allow get: if isVerifiedUser() && isValidId(novelId) && existing().userId == request.auth.uid;
+      allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+
+      allow create: if isVerifiedUser()
+        && isValidId(novelId)
+        && isValidNovel(incoming(), novelId)
+        && incoming().status == 'active'
+        && (!('completedAt' in incoming()) || incoming().completedAt == null)
+        && (!('trashedAt' in incoming()) || incoming().trashedAt == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser()
+        && isValidId(novelId)
+        && existing().userId == request.auth.uid
+        && isValidNovel(incoming(), novelId)
+        && incoming().id == existing().id
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Edit active novel metadata / Story DNA / cover / aggregate stats
+          (existing().status == 'active'
+            && incoming().status == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'authorName', 'genre', 'synopsis', 'coverImageId', 'storyDna', 'chapterCount', 'totalWordCount', 'updatedAt']))
+          ||
+          // Action: Complete novel (enters read-only mode)
+          (existing().status == 'active'
+            && incoming().status == 'completed'
+            && incoming().completedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'completedAt', 'updatedAt']))
+          ||
+          // Action: Reopen completed novel back to active
+          (existing().status == 'completed'
+            && incoming().status == 'active'
+            && (!('completedAt' in incoming()) || incoming().completedAt == null)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'completedAt', 'updatedAt']))
+          ||
+          // Action: Move active or completed novel to Trash
+          (existing().status != 'trashed'
+            && incoming().status == 'trashed'
+            && incoming().trashedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'trashedAt', 'updatedAt']))
+          ||
+          // Action: Restore novel from Trash
+          (existing().status == 'trashed'
+            && ((incoming().status == 'completed' && existing().completedAt != null) || (incoming().status == 'active' && existing().completedAt == null))
+            && (!('trashedAt' in incoming()) || incoming().trashedAt == null)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'trashedAt', 'updatedAt']))
+        );
+
+      allow delete: if isVerifiedUser() && isValidId(novelId) && existing().userId == request.auth.uid;
+
+      match /characters/{characterId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(characterId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(characterId)
+          && isValidCharacter(incoming(), novelId, characterId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId);
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(characterId)
+          && existing().userId == request.auth.uid
+          && isValidCharacter(incoming(), novelId, characterId)
+          && incoming().id == existing().id
+          && incoming().novelId == existing().novelId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'roleType', 'age', 'role', 'archetype', 'personality', 'psychologicalTraits', 'triggers', 'vulnerabilities', 'relationshipDynamics', 'relationships', 'physicalAppearance', 'backstory', 'characterDevelopment', 'status', 'customStatus', 'location', 'imageId', 'sortOrder', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(characterId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+      }
+
+      match /chapters/{chapterId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId)
+          && isValidChapter(incoming(), novelId, chapterId)
+          && (!('trashedAt' in incoming()) || incoming().trashedAt == null)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId);
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId)
+          && existing().userId == request.auth.uid
+          && isValidChapter(incoming(), novelId, chapterId)
+          && incoming().id == existing().id
+          && incoming().novelId == existing().novelId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && (
+            // Action: Edit chapter content/metadata (editable across Draft/Confirmed/Completed)
+            incoming().diff(existing()).affectedKeys().hasOnly(['chapterNumber', 'title', 'content', 'prompt', 'timelineAnchor', 'locationAnchor', 'status', 'wordCount', 'clientUpdatedAt', 'version', 'updatedAt'])
+            ||
+            // Action: Move chapter to Trash
+            (incoming().trashedAt == request.time
+              && incoming().diff(existing()).affectedKeys().hasOnly(['trashedAt', 'updatedAt']))
+            ||
+            // Action: Restore chapter from Trash
+            ((!('trashedAt' in incoming()) || incoming().trashedAt == null)
+              && incoming().diff(existing()).affectedKeys().hasOnly(['trashedAt', 'updatedAt']))
+          );
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+
+        match /versions/{versionId} {
+          allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId) && isValidId(versionId)
+            && existing().userId == request.auth.uid && isNovelOwner(novelId);
+          allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+          allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId) && isValidId(versionId)
+            && isValidChapterVersion(incoming(), novelId, chapterId, versionId)
+            && incoming().createdAt == request.time
+            && isNovelEditable(novelId)
+            && chapterExists(novelId, chapterId);
+          allow update: if false;
+          allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(chapterId) && isValidId(versionId)
+            && existing().userId == request.auth.uid && isNovelEditable(novelId);
+        }
+      }
+
+      match /canonFacts/{canonId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(canonId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(canonId)
+          && isValidCanonFact(incoming(), novelId, canonId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId);
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(canonId)
+          && existing().userId == request.auth.uid
+          && isValidCanonFact(incoming(), novelId, canonId)
+          && incoming().id == existing().id
+          && incoming().novelId == existing().novelId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['factText', 'category', 'approvalStatus', 'isPinned', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(canonId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+      }
+
+      match /summaries/{summaryId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(summaryId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(summaryId)
+          && isValidChapterSummary(incoming(), novelId, summaryId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && chapterExists(novelId, incoming().chapterId);
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(summaryId)
+          && existing().userId == request.auth.uid
+          && isValidChapterSummary(incoming(), novelId, summaryId)
+          && incoming().id == existing().id
+          && incoming().novelId == existing().novelId
+          && incoming().chapterId == existing().chapterId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['chapterNumber', 'chapterTitle', 'summaryText', 'timelineNote', 'locations', 'characters', 'objects', 'revelations', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(summaryId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+      }
+
+      match /stateProposals/{proposalId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(proposalId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(proposalId)
+          && isValidStateProposal(incoming(), novelId, proposalId)
+          && incoming().approvalStatus == 'pending'
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && chapterExists(novelId, incoming().chapterId)
+          && characterExists(novelId, incoming().characterId);
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(proposalId)
+          && existing().userId == request.auth.uid
+          && existing().approvalStatus == 'pending'
+          && isValidStateProposal(incoming(), novelId, proposalId)
+          && incoming().id == existing().id
+          && incoming().novelId == existing().novelId
+          && incoming().chapterId == existing().chapterId
+          && incoming().characterId == existing().characterId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && incoming().approvalStatus in ['approved', 'rejected']
+          && incoming().diff(existing()).affectedKeys().hasOnly(['approvalStatus', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(proposalId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+      }
+
+      match /scratchpadNotes/{noteId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(noteId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(noteId)
+          && isValidScratchpadNote(incoming(), novelId, noteId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId);
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(noteId)
+          && existing().userId == request.auth.uid
+          && isValidScratchpadNote(incoming(), novelId, noteId)
+          && incoming().id == existing().id
+          && incoming().novelId == existing().novelId
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'content', 'category', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(noteId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+      }
+
+      match /images/{imageId} {
+        allow get: if isVerifiedUser() && isValidId(novelId) && isValidId(imageId)
+          && existing().userId == request.auth.uid && isNovelOwner(novelId);
+        allow list: if isVerifiedUser() && resource.data.userId == request.auth.uid;
+        allow create: if isVerifiedUser() && isValidId(novelId) && isValidId(imageId)
+          && isValidImageMetadata(incoming(), novelId, imageId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && (incoming().entityType != 'character' || !('entityId' in incoming()) || incoming().entityId == null || characterExists(novelId, incoming().entityId));
+        allow update: if isVerifiedUser() && isValidId(novelId) && isValidId(imageId)
+          && existing().userId == request.auth.uid
+          && isValidImageMetadata(incoming(), novelId, imageId)
+          && incoming().id == existing().id
+          && incoming().userId == existing().userId
+          && incoming().novelId == existing().novelId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && isNovelEditable(novelId)
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'notes', 'category', 'entityId', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(novelId) && isValidId(imageId)
+          && existing().userId == request.auth.uid && isNovelEditable(novelId);
+      }
+    }
+  }
+}

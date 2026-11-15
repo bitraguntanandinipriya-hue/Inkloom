@@ -82,27 +82,156 @@ export function parseCookies(cookieHeader?: string): Record<string, string> {
   return out;
 }
 
-export function issueSessionCookie(res: Response, userId: string): string {
+let cachedFirebaseProjectId: string | null = null;
+function getFirebaseProjectId(): string | null {
+  if (cachedFirebaseProjectId !== null) return cachedFirebaseProjectId || null;
+  try {
+    const cfgPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+    if (fs.existsSync(cfgPath)) {
+      const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8')) as { projectId?: string };
+      cachedFirebaseProjectId = parsed.projectId || '';
+      return cachedFirebaseProjectId || null;
+    }
+  } catch {
+    // ignore missing config
+  }
+  cachedFirebaseProjectId = '';
+  return null;
+}
+
+let cachedCerts: Record<string, string> = {};
+let cachedCertsExpiresAt = 0;
+
+async function fetchFirebasePublicCerts(forceRefresh = false): Promise<Record<string, string>> {
+  if (!forceRefresh && Date.now() < cachedCertsExpiresAt && Object.keys(cachedCerts).length > 0) {
+    return cachedCerts;
+  }
+  const resp = await fetch(
+    'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com'
+  );
+  if (!resp.ok) {
+    throw new Error('Unable to fetch Firebase public verification certificates.');
+  }
+  const certs = (await resp.json()) as Record<string, string>;
+  const cc = resp.headers.get('cache-control') || '';
+  const maxAgeMatch = cc.match(/max-age=(\d+)/i);
+  const maxAgeSec = maxAgeMatch ? Number(maxAgeMatch[1]) : 3600;
+  cachedCerts = certs;
+  cachedCertsExpiresAt = Date.now() + maxAgeSec * 1000;
+  return certs;
+}
+
+export interface VerifiedFirebaseClaims {
+  sub: string;
+  email: string;
+  email_verified?: boolean;
+  name?: string;
+  picture?: string;
+}
+
+export async function verifyFirebaseIdToken(idToken: string): Promise<VerifiedFirebaseClaims> {
+  const projectId = getFirebaseProjectId();
+  if (!projectId) {
+    throw new Error('Firebase is not configured on this server.');
+  }
+  const decodedComplete = jwt.decode(idToken, { complete: true }) as {
+    header?: { kid?: string; alg?: string };
+  } | null;
+  const kid = decodedComplete?.header?.kid;
+  if (!kid || decodedComplete?.header?.alg !== 'RS256') {
+    throw new Error('Invalid Firebase ID token header.');
+  }
+
+  let certs = await fetchFirebasePublicCerts(false);
+  if (!certs[kid]) {
+    certs = await fetchFirebasePublicCerts(true);
+  }
+  const cert = certs[kid];
+  if (!cert) {
+    throw new Error('Unknown Firebase signing key.');
+  }
+
+  const payload = jwt.verify(idToken, cert, {
+    algorithms: ['RS256'],
+    audience: projectId,
+    issuer: `https://securetoken.google.com/${projectId}`,
+  }) as VerifiedFirebaseClaims;
+
+  if (!payload?.sub || !payload.email) {
+    throw new Error('Firebase token missing subject or email.');
+  }
+  return payload;
+}
+
+export function upsertFirebaseUser(claims: VerifiedFirebaseClaims): UserProfile {
+  const cleanEmail = claims.email.trim().toLowerCase();
+  const now = new Date().toISOString();
+  let row = db
+    .prepare('SELECT * FROM users WHERE id = ? OR google_sub = ? OR email = ?')
+    .get(claims.sub, claims.sub, cleanEmail) as DbUserRow | undefined;
+
+  if (!row) {
+    db.prepare(
+      `INSERT INTO users (id, email, name, google_sub, avatar_url, theme_preference, editor_prefs_json, ai_prefs_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'system', ?, ?, ?, ?)`
+    ).run(
+      claims.sub,
+      cleanEmail,
+      claims.name?.trim() || cleanEmail.split('@')[0],
+      claims.sub,
+      claims.picture || null,
+      JSON.stringify(DEFAULT_EDITOR_PREFS),
+      JSON.stringify(DEFAULT_AI_PREFS),
+      now,
+      now
+    );
+    row = db.prepare('SELECT * FROM users WHERE id = ?').get(claims.sub) as DbUserRow;
+  } else if (!row.google_sub || (!row.avatar_url && claims.picture)) {
+    db.prepare(
+      'UPDATE users SET google_sub = COALESCE(google_sub, ?), avatar_url = COALESCE(avatar_url, ?), updated_at = ? WHERE id = ?'
+    ).run(claims.sub, claims.picture || null, now, row.id);
+    row = db.prepare('SELECT * FROM users WHERE id = ?').get(row.id) as DbUserRow;
+  }
+  return serializeUser(row);
+}
+
+export function issueSessionCookie(res: Response, userId: string, req?: Request): string {
   const token = jwt.sign({ sub: userId }, getJwtSecret(), { expiresIn: '30d' });
+  const forwardedProto = req?.headers['x-forwarded-proto'];
+  const isHttps =
+    Boolean(req?.secure) ||
+    forwardedProto === 'https' ||
+    process.env.NODE_ENV === 'production';
+
   res.cookie(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: isHttps ? 'none' : 'lax',
+    secure: isHttps,
     maxAge: 30 * 24 * 60 * 60 * 1000,
     path: '/',
   });
   return token;
 }
 
-export function clearSessionCookie(res: Response) {
-  res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
+export function clearSessionCookie(res: Response, req?: Request) {
+  const forwardedProto = req?.headers['x-forwarded-proto'];
+  const isHttps =
+    Boolean(req?.secure) ||
+    forwardedProto === 'https' ||
+    process.env.NODE_ENV === 'production';
+
+  res.clearCookie(SESSION_COOKIE_NAME, {
+    path: '/',
+    sameSite: isHttps ? 'none' : 'lax',
+    secure: isHttps,
+  });
 }
 
 export interface AuthenticatedRequest extends Request {
   user?: UserProfile;
 }
 
-export function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+export async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   const cookies = parseCookies(req.headers.cookie);
   const authHeader = req.headers.authorization;
   const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
@@ -111,6 +240,23 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
   if (!token) {
     res.status(401).json({ error: 'Authentication required' });
     return;
+  }
+
+  // Check if token is a Firebase RS256 ID token
+  const decodedHeader = jwt.decode(token, { complete: true }) as {
+    header?: { alg?: string };
+  } | null;
+
+  if (decodedHeader?.header?.alg === 'RS256') {
+    try {
+      const claims = await verifyFirebaseIdToken(token);
+      req.user = upsertFirebaseUser(claims);
+      next();
+      return;
+    } catch {
+      res.status(401).json({ error: 'Firebase session expired or invalid' });
+      return;
+    }
   }
 
   try {

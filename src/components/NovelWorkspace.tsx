@@ -9,6 +9,8 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { api, type NovelBundleResponse } from '../lib/api';
+import { useFirebase } from '../lib/FirebaseContext';
+import { firestoreStore } from '../lib/firestoreStore';
 import { offlineDb } from '../lib/offlineDb';
 import type { BackgroundJob, Chapter, Novel, UserProfile } from '../types';
 import { ChapterStudio } from './ChapterStudio';
@@ -34,6 +36,8 @@ export const NovelWorkspace: React.FC<NovelWorkspaceProps> = ({
   onOpenExport,
   onNovelMutated,
 }) => {
+  const { firebaseUser, authReady, reportFirestoreError } = useFirebase();
+
   const [tab, setTab] = useState<'studio' | 'bible' | 'references'>('studio');
   const [bundle, setBundle] = useState<NovelBundleResponse | null>(null);
   const [jobs, setJobs] = useState<BackgroundJob[]>([]);
@@ -45,7 +49,23 @@ export const NovelWorkspace: React.FC<NovelWorkspaceProps> = ({
 
   const loadBundle = useCallback(async () => {
     try {
-      const data = await api.getNovelBundle(novelId);
+      let data: NovelBundleResponse;
+      try {
+        data = await api.getNovelBundle(novelId);
+      } catch (serverErr) {
+        if (authReady && firebaseUser && firebaseUser.emailVerified) {
+          const fsBundle = await firestoreStore.fetchBundleFromFirestore(firebaseUser.uid, novelId);
+          if (fsBundle) {
+            await api.hydrateFromFirestore({ bundle: fsBundle }).catch(() => {});
+            data = await api.getNovelBundle(novelId).catch(() => fsBundle);
+          } else {
+            throw serverErr;
+          }
+        } else {
+          throw serverErr;
+        }
+      }
+
       // Merge any pending offline chapters that are newer than cloud
       const localChapters = await offlineDb.getChaptersForNovel(novelId);
       const mergedActive = data.chapters.map((serverCh) => {
@@ -97,12 +117,79 @@ export const NovelWorkspace: React.FC<NovelWorkspaceProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [novelId]);
+  }, [novelId, authReady, firebaseUser]);
 
   useEffect(() => {
     setLoading(true);
     void loadBundle();
   }, [loadBundle]);
+
+  // Real-time Firestore novel workspace subscription gated behind authReady && verified firebaseUser
+  useEffect(() => {
+    if (!authReady || !firebaseUser || !firebaseUser.emailVerified) return;
+
+    const unsub = firestoreStore.subscribeNovelRealtime(
+      firebaseUser.uid,
+      novelId,
+      (patch) => {
+        setBundle((prev) => {
+          if (!prev) return prev;
+          const next = { ...prev };
+          if (patch.novel) {
+            next.novel = {
+              ...patch.novel,
+              chapterCount: patch.novel.chapterCount ?? prev.novel.chapterCount,
+              totalWordCount: patch.novel.totalWordCount ?? prev.novel.totalWordCount,
+            };
+          }
+          if (patch.characters && (patch.characters.length > 0 || prev.characters.length === 0)) {
+            next.characters = patch.characters;
+          }
+          if (patch.chapters) {
+            if (patch.chapters.length > 0 || prev.chapters.length === 0) {
+              const prevById = new Map(prev.chapters.map((c) => [c.id, c]));
+              next.chapters = patch.chapters.map((incomingCh) => {
+                const existing = prevById.get(incomingCh.id);
+                if (
+                  existing &&
+                  existing.syncState === 'pending' &&
+                  new Date(existing.clientUpdatedAt).getTime() >
+                    new Date(incomingCh.clientUpdatedAt).getTime()
+                ) {
+                  return existing;
+                }
+                return incomingCh;
+              });
+            }
+          }
+          if (patch.trashedChapters !== undefined) {
+            next.trashedChapters = patch.trashedChapters;
+          }
+          if (patch.canonFacts !== undefined) {
+            next.canonFacts = patch.canonFacts;
+          }
+          if (patch.summaries !== undefined) {
+            next.summaries = patch.summaries;
+          }
+          if (patch.stateProposals !== undefined) {
+            next.stateProposals = patch.stateProposals;
+          }
+          if (patch.scratchpadNotes !== undefined) {
+            next.scratchpadNotes = patch.scratchpadNotes;
+          }
+          if (patch.images && (patch.images.length > 0 || prev.images.length === 0)) {
+            next.images = patch.images;
+          }
+          return next;
+        });
+      },
+      (err) => {
+        reportFirestoreError(err);
+      }
+    );
+
+    return () => unsub();
+  }, [authReady, firebaseUser, novelId, reportFirestoreError]);
 
   // Auto-sync pending offline chapters when connectivity returns
   useEffect(() => {

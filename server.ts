@@ -35,6 +35,8 @@ import {
   registerUser,
   requireAuth,
   serializeUser,
+  upsertFirebaseUser,
+  verifyFirebaseIdToken,
   verifyGoogleSignIn,
   type AuthenticatedRequest,
 } from './server/auth';
@@ -219,7 +221,7 @@ app.post('/api/auth/register', async (req, res) => {
       name?: string;
     };
     const user = await registerUser(email || '', password || '', name || '');
-    issueSessionCookie(res, user.id);
+    issueSessionCookie(res, user.id, req);
     res.status(201).json({ user });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Registration failed' });
@@ -230,7 +232,7 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body as { email?: string; password?: string };
     const user = await loginUser(email || '', password || '');
-    issueSessionCookie(res, user.id);
+    issueSessionCookie(res, user.id, req);
     res.json({ user });
   } catch (err) {
     res.status(401).json({ error: err instanceof Error ? err.message : 'Login failed' });
@@ -245,15 +247,31 @@ app.post('/api/auth/google', async (req, res) => {
       return;
     }
     const user = await verifyGoogleSignIn(idToken);
-    issueSessionCookie(res, user.id);
+    issueSessionCookie(res, user.id, req);
     res.json({ user });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Google Sign-In failed' });
   }
 });
 
-app.post('/api/auth/logout', (_req, res) => {
-  clearSessionCookie(res);
+app.post('/api/auth/firebase-session', async (req, res) => {
+  try {
+    const { idToken } = req.body as { idToken?: string };
+    if (!idToken) {
+      res.status(400).json({ error: 'Missing Firebase ID token.' });
+      return;
+    }
+    const claims = await verifyFirebaseIdToken(idToken);
+    const user = upsertFirebaseUser(claims);
+    issueSessionCookie(res, user.id, req);
+    res.json({ user });
+  } catch (err) {
+    res.status(401).json({ error: err instanceof Error ? err.message : 'Firebase authentication failed' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  clearSessionCookie(res, req);
   res.json({ ok: true });
 });
 
@@ -313,8 +331,203 @@ app.patch('/api/auth/preferences', requireAuth, (req: AuthenticatedRequest, res)
 app.delete('/api/auth/account', requireAuth, (req: AuthenticatedRequest, res) => {
   const user = req.user!;
   deleteUserAccount(user.id);
-  clearSessionCookie(res);
+  clearSessionCookie(res, req);
   res.json({ ok: true });
+});
+
+app.post('/api/sync/hydrate', requireAuth, (req: AuthenticatedRequest, res) => {
+  try {
+    const userId = req.user!.id;
+    const { novels, bundle } = req.body as {
+      novels?: Novel[];
+      bundle?: {
+        novel: Novel;
+        characters?: CharacterProfile[];
+        chapters?: Chapter[];
+        trashedChapters?: Chapter[];
+        canonFacts?: Array<{
+          id: string;
+          novelId: string;
+          factText: string;
+          category: string;
+          sourceChapterId: string | null;
+          approvalStatus: string;
+          isPinned: boolean;
+          createdAt: string;
+          updatedAt: string;
+        }>;
+        summaries?: Array<{
+          id: string;
+          novelId: string;
+          chapterId: string;
+          summaryText: string;
+          timelineNote: string;
+          locations: string[];
+          characters: string[];
+          objects: string[];
+          revelations: string[];
+          createdAt: string;
+          updatedAt: string;
+        }>;
+        scratchpadNotes?: Array<{
+          id: string;
+          novelId: string;
+          title: string;
+          content: string;
+          category: string;
+          createdAt: string;
+          updatedAt: string;
+        }>;
+      };
+    };
+
+    const insertNovel = (n: Novel) => {
+      db.prepare(
+        `INSERT OR IGNORE INTO novels
+         (id, user_id, title, author_name, genre, synopsis, cover_image_id, status, completed_at, trashed_at, story_dna_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        n.id,
+        userId,
+        n.title,
+        n.authorName || '',
+        n.genre || 'Dark Romance',
+        n.synopsis || '',
+        n.coverImageId || null,
+        n.status || 'active',
+        n.completedAt || null,
+        n.trashedAt || null,
+        JSON.stringify(n.storyDna),
+        n.createdAt,
+        n.updatedAt
+      );
+    };
+
+    db.transaction(() => {
+      if (Array.isArray(novels)) {
+        for (const n of novels) {
+          if (n?.id) insertNovel(n);
+        }
+      }
+      if (bundle?.novel?.id) {
+        insertNovel(bundle.novel);
+        for (const ch of bundle.characters || []) {
+          db.prepare(
+            `INSERT OR IGNORE INTO characters
+             (id, novel_id, user_id, role_type, name, age, role, archetype, personality, psychological_traits, triggers, vulnerabilities, relationship_dynamics, relationships, physical_appearance, backstory, character_development, status, custom_status, location, image_id, sort_order, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            ch.id,
+            bundle.novel.id,
+            userId,
+            ch.roleType,
+            ch.name,
+            ch.age || '',
+            ch.role || '',
+            ch.archetype || '',
+            ch.personality || '',
+            ch.psychologicalTraits || '',
+            ch.triggers || '',
+            ch.vulnerabilities || '',
+            ch.relationshipDynamics || '',
+            ch.relationships || '',
+            ch.physicalAppearance || '',
+            ch.backstory || '',
+            ch.characterDevelopment || '',
+            ch.status || 'Active',
+            ch.customStatus || '',
+            ch.location || '',
+            ch.imageId || null,
+            ch.sortOrder || 0,
+            ch.createdAt,
+            ch.updatedAt
+          );
+        }
+        for (const chap of [...(bundle.chapters || []), ...(bundle.trashedChapters || [])]) {
+          db.prepare(
+            `INSERT OR IGNORE INTO chapters
+             (id, novel_id, user_id, chapter_number, title, content, prompt, timeline_anchor, location_anchor, status, word_count, trashed_at, client_updated_at, version, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            chap.id,
+            bundle.novel.id,
+            userId,
+            chap.chapterNumber,
+            chap.title,
+            chap.content || '',
+            chap.prompt || '',
+            chap.timelineAnchor || '',
+            chap.locationAnchor || '',
+            chap.status || 'Draft',
+            chap.wordCount || 0,
+            chap.trashedAt || null,
+            chap.clientUpdatedAt || chap.updatedAt,
+            chap.version || 1,
+            chap.createdAt,
+            chap.updatedAt
+          );
+        }
+        for (const fact of bundle.canonFacts || []) {
+          db.prepare(
+            `INSERT OR IGNORE INTO canon_facts
+             (id, novel_id, user_id, fact_text, category, source_chapter_id, approval_status, is_pinned, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            fact.id,
+            bundle.novel.id,
+            userId,
+            fact.factText,
+            fact.category || 'General',
+            fact.sourceChapterId || null,
+            fact.approvalStatus || 'pending',
+            fact.isPinned ? 1 : 0,
+            fact.createdAt,
+            fact.updatedAt
+          );
+        }
+        for (const sum of bundle.summaries || []) {
+          db.prepare(
+            `INSERT OR IGNORE INTO chapter_summaries
+             (id, novel_id, chapter_id, user_id, summary_text, timeline_note, locations_json, characters_json, objects_json, revelations_json, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            sum.id,
+            bundle.novel.id,
+            sum.chapterId,
+            userId,
+            sum.summaryText,
+            sum.timelineNote || '',
+            JSON.stringify(sum.locations || []),
+            JSON.stringify(sum.characters || []),
+            JSON.stringify(sum.objects || []),
+            JSON.stringify(sum.revelations || []),
+            sum.createdAt,
+            sum.updatedAt
+          );
+        }
+        for (const note of bundle.scratchpadNotes || []) {
+          db.prepare(
+            `INSERT OR IGNORE INTO scratchpad_notes
+             (id, novel_id, user_id, title, content, category, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            note.id,
+            bundle.novel.id,
+            userId,
+            note.title,
+            note.content || '',
+            note.category || 'Idea',
+            note.createdAt,
+            note.updatedAt
+          );
+        }
+      }
+    })();
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Hydration failed' });
+  }
 });
 
 // ============================================================================
@@ -945,18 +1158,32 @@ app.patch('/api/images/:imageId', requireAuth, (req: AuthenticatedRequest, res) 
     return;
   }
 
+  const nextTitle = title !== undefined ? title : existing.title;
+  const nextNotes = notes !== undefined ? notes : existing.notes;
+  const nextCategory = category !== undefined ? category : existing.category;
+  const nextEntityId = entityId !== undefined ? entityId : existing.entity_id;
+
   db.prepare(
     `UPDATE images SET title = ?, notes = ?, category = ?, entity_id = ? WHERE id = ? AND user_id = ?`
-  ).run(
-    title !== undefined ? title : existing.title,
-    notes !== undefined ? notes : existing.notes,
-    category !== undefined ? category : existing.category,
-    entityId !== undefined ? entityId : existing.entity_id,
-    req.params.imageId,
-    userId
-  );
+  ).run(nextTitle, nextNotes, nextCategory, nextEntityId, req.params.imageId, userId);
 
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    image: {
+      id: String(existing.id),
+      userId: String(existing.user_id),
+      novelId: String(existing.novel_id),
+      entityType: existing.entity_type,
+      entityId: nextEntityId ? String(nextEntityId) : null,
+      category: nextCategory,
+      title: String(nextTitle || ''),
+      notes: String(nextNotes || ''),
+      mimeType: existing.mime_type,
+      sizeBytes: Number(existing.size_bytes),
+      url: `/api/images/${existing.id}/file`,
+      createdAt: String(existing.created_at),
+    },
+  });
 });
 
 app.get('/api/images/:imageId/file', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -1004,7 +1231,12 @@ app.delete('/api/images/:imageId', requireAuth, (req: AuthenticatedRequest, res)
   if (row.file_path && fs.existsSync(row.file_path)) {
     fs.unlinkSync(row.file_path);
   }
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    novelId: row.novel_id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+  });
 });
 
 // ============================================================================
@@ -1290,7 +1522,7 @@ app.post('/api/chapters/:chapterId/trash', requireAuth, (req: AuthenticatedReque
     cur.id,
     userId
   );
-  res.json({ ok: true });
+  res.json({ ok: true, novelId: cur.novelId });
 });
 
 app.post('/api/chapters/:chapterId/restore', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -1328,7 +1560,7 @@ app.delete('/api/chapters/:chapterId', requireAuth, (req: AuthenticatedRequest, 
     return;
   }
   db.prepare('DELETE FROM chapters WHERE id = ? AND user_id = ?').run(req.params.chapterId, userId);
-  res.json({ ok: true });
+  res.json({ ok: true, novelId: row.novel_id });
 });
 
 app.get('/api/chapters/:chapterId/versions', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -1378,7 +1610,21 @@ app.post('/api/chapters/:chapterId/versions', requireAuth, (req: AuthenticatedRe
     reason || 'Manual snapshot',
     now
   );
-  res.status(201).json({ ok: true, id });
+  res.status(201).json({
+    ok: true,
+    id,
+    novelId: String(ch.novel_id),
+    version: {
+      id,
+      chapterId: String(ch.id),
+      title: String(ch.title),
+      content: String(ch.content || ''),
+      prompt: String(ch.prompt || ''),
+      wordCount: Number(ch.word_count || 0),
+      reason: reason || 'Manual snapshot',
+      createdAt: now,
+    },
+  });
 });
 
 app.post(
@@ -1444,7 +1690,7 @@ app.post(
       string,
       unknown
     >;
-    res.json({ chapter: formatChapterRow(updated) });
+    res.json({ chapter: formatChapterRow(updated), novelId: String(ch.novel_id) });
   }
 );
 
@@ -1594,26 +1840,38 @@ app.patch('/api/canon/:canonId', requireAuth, (req: AuthenticatedRequest, res) =
     isPinned !== undefined ? (isPinned ? 1 : 0) : nextStatus === 'pinned' ? 1 : nextStatus === 'rejected' ? 0 : Number(existing.is_pinned);
   const now = new Date().toISOString();
 
+  const nextFactText = factText !== undefined ? factText.trim() : String(existing.fact_text);
+  const nextCategory = category !== undefined ? category.trim() : String(existing.category);
+
   db.prepare(
     `UPDATE canon_facts SET fact_text = ?, category = ?, approval_status = ?, is_pinned = ?, updated_at = ? WHERE id = ? AND user_id = ?`
-  ).run(
-    factText !== undefined ? factText.trim() : existing.fact_text,
-    category !== undefined ? category.trim() : existing.category,
-    nextStatus,
-    nextPinned,
-    now,
-    req.params.canonId,
-    userId
-  );
-  res.json({ ok: true });
+  ).run(nextFactText, nextCategory, nextStatus, nextPinned, now, req.params.canonId, userId);
+
+  res.json({
+    ok: true,
+    canonFact: {
+      id: String(existing.id),
+      novelId: String(existing.novel_id),
+      factText: nextFactText,
+      category: nextCategory,
+      sourceChapterId: existing.source_chapter_id ? String(existing.source_chapter_id) : null,
+      approvalStatus: nextStatus,
+      isPinned: nextPinned === 1,
+      createdAt: String(existing.created_at),
+      updatedAt: now,
+    },
+  });
 });
 
 app.delete('/api/canon/:canonId', requireAuth, (req: AuthenticatedRequest, res) => {
+  const existing = db
+    .prepare('SELECT novel_id FROM canon_facts WHERE id = ? AND user_id = ?')
+    .get(req.params.canonId, req.user!.id) as { novel_id: string } | undefined;
   db.prepare('DELETE FROM canon_facts WHERE id = ? AND user_id = ?').run(
     req.params.canonId,
     req.user!.id
   );
-  res.json({ ok: true });
+  res.json({ ok: true, novelId: existing?.novel_id || null });
 });
 
 app.post('/api/chapters/:chapterId/summarize', requireAuth, async (req: AuthenticatedRequest, res) => {
@@ -1631,7 +1889,7 @@ app.post('/api/chapters/:chapterId/summarize', requireAuth, async (req: Authenti
       novelId: ch.novel_id,
       chapterId: req.params.chapterId,
     });
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, novelId: ch.novel_id, ...result });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : 'Summarization failed' });
   }
@@ -1646,7 +1904,36 @@ app.patch('/api/summaries/:summaryId', requireAuth, (req: AuthenticatedRequest, 
   db.prepare(
     `UPDATE chapter_summaries SET summary_text = COALESCE(?, summary_text), timeline_note = COALESCE(?, timeline_note), updated_at = ? WHERE id = ? AND user_id = ?`
   ).run(summaryText ?? null, timelineNote ?? null, now, req.params.summaryId, req.user!.id);
-  res.json({ ok: true });
+
+  const row = db
+    .prepare(
+      `SELECT cs.*, ch.chapter_number, ch.title as chapter_title
+       FROM chapter_summaries cs
+       JOIN chapters ch ON cs.chapter_id = ch.id
+       WHERE cs.id = ? AND cs.user_id = ?`
+    )
+    .get(req.params.summaryId, req.user!.id) as Record<string, unknown> | undefined;
+
+  res.json({
+    ok: true,
+    summary: row
+      ? {
+          id: String(row.id),
+          novelId: String(row.novel_id),
+          chapterId: String(row.chapter_id),
+          chapterNumber: Number(row.chapter_number),
+          chapterTitle: String(row.chapter_title),
+          summaryText: String(row.summary_text),
+          timelineNote: String(row.timeline_note || ''),
+          locations: JSON.parse(String(row.locations_json || '[]')),
+          characters: JSON.parse(String(row.characters_json || '[]')),
+          objects: JSON.parse(String(row.objects_json || '[]')),
+          revelations: JSON.parse(String(row.revelations_json || '[]')),
+          createdAt: String(row.created_at),
+          updatedAt: String(row.updated_at),
+        }
+      : null,
+  });
 });
 
 app.patch('/api/state-proposals/:proposalId', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -1657,6 +1944,7 @@ app.patch('/api/state-proposals/:proposalId', requireAuth, (req: AuthenticatedRe
     .get(req.params.proposalId, userId) as
     | {
         id: string;
+        novel_id: string;
         character_id: string;
         proposed_status: string;
         proposed_location: string;
@@ -1668,10 +1956,11 @@ app.patch('/api/state-proposals/:proposalId', requireAuth, (req: AuthenticatedRe
     return;
   }
 
+  const nextApprovalStatus = action === 'approve' ? 'approved' : 'rejected';
   const now = new Date().toISOString();
   db.transaction(() => {
     db.prepare('UPDATE character_state_proposals SET approval_status = ? WHERE id = ?').run(
-      action === 'approve' ? 'approved' : 'rejected',
+      nextApprovalStatus,
       proposal.id
     );
     if (action === 'approve') {
@@ -1687,7 +1976,19 @@ app.patch('/api/state-proposals/:proposalId', requireAuth, (req: AuthenticatedRe
     }
   })();
 
-  res.json({ ok: true });
+  const updatedCharRow =
+    action === 'approve'
+      ? (db.prepare('SELECT * FROM characters WHERE id = ?').get(proposal.character_id) as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+
+  res.json({
+    ok: true,
+    novelId: proposal.novel_id,
+    approvalStatus: nextApprovalStatus,
+    character: updatedCharRow ? formatCharacterRow(updatedCharRow) : null,
+  });
 });
 
 app.post('/api/novels/:novelId/scratchpad', requireAuth, (req: AuthenticatedRequest, res) => {
@@ -1733,15 +2034,34 @@ app.patch('/api/scratchpad/:noteId', requireAuth, (req: AuthenticatedRequest, re
     `UPDATE scratchpad_notes SET title = COALESCE(?, title), content = COALESCE(?, content), category = COALESCE(?, category), updated_at = ?
      WHERE id = ? AND user_id = ?`
   ).run(title ?? null, content ?? null, category ?? null, now, req.params.noteId, req.user!.id);
-  res.json({ ok: true });
+  const noteRow = db
+    .prepare('SELECT * FROM scratchpad_notes WHERE id = ? AND user_id = ?')
+    .get(req.params.noteId, req.user!.id) as Record<string, unknown> | undefined;
+  res.json({
+    ok: true,
+    note: noteRow
+      ? {
+          id: String(noteRow.id),
+          novelId: String(noteRow.novel_id),
+          title: String(noteRow.title),
+          content: String(noteRow.content || ''),
+          category: String(noteRow.category || 'Idea'),
+          createdAt: String(noteRow.created_at),
+          updatedAt: String(noteRow.updated_at),
+        }
+      : null,
+  });
 });
 
 app.delete('/api/scratchpad/:noteId', requireAuth, (req: AuthenticatedRequest, res) => {
+  const existing = db
+    .prepare('SELECT novel_id FROM scratchpad_notes WHERE id = ? AND user_id = ?')
+    .get(req.params.noteId, req.user!.id) as { novel_id: string } | undefined;
   db.prepare('DELETE FROM scratchpad_notes WHERE id = ? AND user_id = ?').run(
     req.params.noteId,
     req.user!.id
   );
-  res.json({ ok: true });
+  res.json({ ok: true, novelId: existing?.novel_id || null });
 });
 
 // ============================================================================

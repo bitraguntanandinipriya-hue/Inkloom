@@ -1,0 +1,705 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Non-PII author workspace display profile stored at /users/{userId}",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "themePreference": {
+          "type": "string",
+          "enum": ["system", "light", "dark"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "displayName", "themePreference", "createdAt", "updatedAt"]
+    },
+    "UserPrivateInfo": {
+      "title": "UserPrivateInfo",
+      "description": "PII and private author studio preferences isolated under /users/{userId}/private/info",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "avatarUrl": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "authMethod": {
+          "type": "string",
+          "enum": ["google", "email"]
+        },
+        "editorPrefs": {
+          "type": "object"
+        },
+        "aiPrefs": {
+          "type": "object"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["userId", "email", "authMethod", "editorPrefs", "aiPrefs", "createdAt", "updatedAt"]
+    },
+    "Novel": {
+      "title": "Novel",
+      "description": "Author novel project with Story DNA, lifecycle status, and aggregate counts",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "authorName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "genre": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "synopsis": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "coverImageId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "completed", "trashed"]
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "trashedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "storyDna": {
+          "type": "object"
+        },
+        "chapterCount": {
+          "type": "integer"
+        },
+        "totalWordCount": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "title", "authorName", "genre", "synopsis", "status", "storyDna", "createdAt", "updatedAt"]
+    },
+    "Character": {
+      "title": "Character",
+      "description": "Lead or supporting character profile belonging to a novel",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "roleType": {
+          "type": "string",
+          "enum": ["lead_male", "lead_female", "lead_custom", "supporting"]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "age": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "role": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "archetype": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "personality": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "psychologicalTraits": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "triggers": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "vulnerabilities": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "relationshipDynamics": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "relationships": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "physicalAppearance": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "backstory": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "characterDevelopment": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Active", "Injured", "Missing", "Estranged", "Deceased", "Custom"]
+        },
+        "customStatus": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "location": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "imageId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "sortOrder": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "userId", "roleType", "name", "status", "sortOrder", "createdAt", "updatedAt"]
+    },
+    "Chapter": {
+      "title": "Chapter",
+      "description": "Novel chapter manuscript with anchors, status, word count, and version metadata",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "chapterNumber": {
+          "type": "integer"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 250000
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "timelineAnchor": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "locationAnchor": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Draft", "Confirmed", "Completed"]
+        },
+        "wordCount": {
+          "type": "integer"
+        },
+        "trashedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "clientUpdatedAt": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "version": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "userId", "chapterNumber", "title", "content", "prompt", "timelineAnchor", "locationAnchor", "status", "wordCount", "clientUpdatedAt", "version", "createdAt", "updatedAt"]
+    },
+    "ChapterVersion": {
+      "title": "ChapterVersion",
+      "description": "Immutable historical snapshot of a chapter",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "chapterId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 250000
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "wordCount": {
+          "type": "integer"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "chapterId", "userId", "title", "content", "prompt", "wordCount", "reason", "createdAt"]
+    },
+    "CanonFact": {
+      "title": "CanonFact",
+      "description": "Author-approved or proposed canon fact in the Story Bible",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "factText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "sourceChapterId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "approvalStatus": {
+          "type": "string",
+          "enum": ["pending", "pinned", "rejected"]
+        },
+        "isPinned": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "userId", "factText", "category", "approvalStatus", "isPinned", "createdAt", "updatedAt"]
+    },
+    "ChapterSummary": {
+      "title": "ChapterSummary",
+      "description": "Continuity summary and extracted story elements for a chapter",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "chapterId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "chapterNumber": {
+          "type": "integer"
+        },
+        "chapterTitle": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "summaryText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        "timelineNote": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "locations": {
+          "type": "array"
+        },
+        "characters": {
+          "type": "array"
+        },
+        "objects": {
+          "type": "array"
+        },
+        "revelations": {
+          "type": "array"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "chapterId", "userId", "summaryText", "timelineNote", "locations", "characters", "objects", "revelations", "createdAt", "updatedAt"]
+    },
+    "CharacterStateProposal": {
+      "title": "CharacterStateProposal",
+      "description": "Proposed status or location change for a character awaiting author approval",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "chapterId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "characterId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "characterName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "proposedStatus": {
+          "type": "string",
+          "enum": ["Active", "Injured", "Missing", "Estranged", "Deceased", "Custom"]
+        },
+        "proposedLocation": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "approvalStatus": {
+          "type": "string",
+          "enum": ["pending", "approved", "rejected"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "chapterId", "characterId", "userId", "proposedStatus", "proposedLocation", "reason", "approvalStatus", "createdAt", "updatedAt"]
+    },
+    "ScratchpadNote": {
+      "title": "ScratchpadNote",
+      "description": "Private non-canon brainstorming note inside a novel Story Bible",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 20000
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "novelId", "userId", "title", "content", "category", "createdAt", "updatedAt"]
+    },
+    "ImageMetadata": {
+      "title": "ImageMetadata",
+      "description": "Metadata record for an author-uploaded reference image stored on secure object storage",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "novelId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "entityType": {
+          "type": "string",
+          "enum": ["cover", "character", "reference"]
+        },
+        "entityId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "category": {
+          "type": "string",
+          "enum": ["cover", "character", "location", "architecture", "clothing", "prop", "other"]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 3000
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/jpeg", "image/png", "image/webp"]
+        },
+        "sizeBytes": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "userId", "novelId", "entityType", "category", "title", "notes", "mimeType", "sizeBytes", "url", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Owner-isolated non-PII author display profile"
+    },
+    "/users/{userId}/private/{infoId}": {
+      "schema": { "$ref": "#/entities/UserPrivateInfo" },
+      "description": "Owner-only PII and studio preferences (infoId = 'info')"
+    },
+    "/novels/{novelId}": {
+      "schema": { "$ref": "#/entities/Novel" },
+      "description": "Top-level novel collection owned by an authenticated author"
+    },
+    "/novels/{novelId}/characters/{characterId}": {
+      "schema": { "$ref": "#/entities/Character" },
+      "description": "Lead and supporting characters belonging to a novel"
+    },
+    "/novels/{novelId}/chapters/{chapterId}": {
+      "schema": { "$ref": "#/entities/Chapter" },
+      "description": "Novel manuscript chapters and trash state"
+    },
+    "/novels/{novelId}/chapters/{chapterId}/versions/{versionId}": {
+      "schema": { "$ref": "#/entities/ChapterVersion" },
+      "description": "Immutable chapter version snapshots"
+    },
+    "/novels/{novelId}/canonFacts/{canonId}": {
+      "schema": { "$ref": "#/entities/CanonFact" },
+      "description": "Author-owned canon facts and pending proposals"
+    },
+    "/novels/{novelId}/summaries/{summaryId}": {
+      "schema": { "$ref": "#/entities/ChapterSummary" },
+      "description": "Chapter continuity summaries and extracted elements"
+    },
+    "/novels/{novelId}/stateProposals/{proposalId}": {
+      "schema": { "$ref": "#/entities/CharacterStateProposal" },
+      "description": "Character status/location change proposals awaiting approval"
+    },
+    "/novels/{novelId}/scratchpadNotes/{noteId}": {
+      "schema": { "$ref": "#/entities/ScratchpadNote" },
+      "description": "Private non-canon brainstorming notes"
+    },
+    "/novels/{novelId}/images/{imageId}": {
+      "schema": { "$ref": "#/entities/ImageMetadata" },
+      "description": "Author-uploaded image metadata records linked to object storage"
+    }
+  }
+}
