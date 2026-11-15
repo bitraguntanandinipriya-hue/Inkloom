@@ -1,0 +1,8 @@
+{
+  "name": "Inkloom",
+  "description": "An editorial AI-powered novel-writing studio with Story Bible continuity, chapter version control, offline-first persistence, and multi-provider generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
